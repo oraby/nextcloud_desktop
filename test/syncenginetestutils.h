@@ -384,6 +384,8 @@ public:
     char payload = 0;
     int size = 0;
     bool aborted = false;
+    // Qt removes the Content-Length header of replies it decompresses transparently
+    bool sendContentLength = true;
 
     FakeGetReply(FileInfo &remoteRootFileInfo, QNetworkAccessManager::Operation op, const QNetworkRequest &request, QObject *parent, bool autoRespond = true);
 

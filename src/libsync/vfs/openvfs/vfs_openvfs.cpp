@@ -503,8 +503,26 @@ HydrationJob *OpenVFS::hydrateFile(const QByteArray &fileId, const QString &targ
     _hydrationJobs.insert(fileId, hydration);
 
     connect(hydration, &HydrationJob::finished, this, &OpenVFS::slotHydrateJobFinished);
-    connect(hydration, &HydrationJob::error, this, [this, hydration](const QString &error) {
+    connect(hydration, &HydrationJob::error, this, [this, hydration, targetPath](const QString &error) {
         qCWarning(lcOpenVFS) << u"Hydration failed" << error;
+        // make the file a placeholder again, so that partial data is neither read nor uploaded
+        if (auto attr = placeHolderAttributes(targetPath)) {
+            attr.state = ::OpenVFS::Constants::States::DeHydrated;
+            const auto record = hydration->record();
+            auto result = Result<void, QString>{};
+            if (record.isValid()) {
+                if (QFile file(targetPath); !file.resize(0)) {
+                    qCWarning(lcOpenVFS) << u"Failed to truncate" << targetPath << file.errorString();
+                }
+                result = setPlaceholderAttributes(attr, record._modtime);
+            } else {
+                // the download did not start, the file is unchanged
+                result = setPlaceholderAttributes(attr);
+            }
+            if (!result) {
+                qCWarning(lcOpenVFS) << u"Failed to reset the placeholder" << targetPath << result.error();
+            }
+        }
         this->_hydrationJobs.remove(hydration->fileId());
         hydration->deleteLater();
     });

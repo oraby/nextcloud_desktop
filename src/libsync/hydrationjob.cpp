@@ -56,8 +56,9 @@ void HydrationJob::start()
             errorMsg = _job->reply()->errorString();
         }
 
-        if (_job->contentLength() != -1) {
-            const auto size = _job->resumeStart() + _job->contentLength();
+        if (errorMsg.isEmpty()) {
+            // count the written bytes, Qt removes the Content-Length header of replies it decompresses, see QTBUG-73364
+            const auto size = _job->currentDownloadPosition();
             if (size != _record._fileSize) {
                 //: %1: expected file size in bytes, %2: actual file size in bytes
                 errorMsg = tr("Unexpected file size transferred. Expected %1 received %2").arg(QString::number(_record._fileSize), QString::number(size));

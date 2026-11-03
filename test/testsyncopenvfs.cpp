@@ -6,6 +6,7 @@
 #include "syncenginetestutils.h"
 
 #include "common/vfs.h"
+#include "filesystem.h"
 #include "hydrationjob.h"
 #include "vfs/openvfs/vfs_openvfs.h"
 #include "vfs/openvfs/xattr.h"
@@ -191,6 +192,43 @@ private Q_SLOTS:
         QCOMPARE(dbRecord(fakeFolder, u"online/file"_s)._type, ItemTypeFile);
         QCOMPARE(QFileInfo(fakeFolder.localPath() + u"online/file"_s).size(), 64);
         QCOMPARE(*vfs->pinState(u"online"_s), PinState::OnlineOnly);
+    }
+
+    void testHydrateFile_downloadFails_restoresPlaceholder()
+    {
+        FakeFolder fakeFolder{FileInfo{}};
+        auto vfs = setupVfs(fakeFolder);
+        fakeFolder.remoteModifier().insert(u"file"_s, 64);
+        QVERIFY(fakeFolder.syncOnce());
+        QVERIFY(isDehydrated(fakeFolder, *vfs, u"file"_s));
+        const auto record = dbRecord(fakeFolder, u"file"_s);
+
+        // the server sends more data than expected, so the hydration fails after writing to the file
+        fakeFolder.remoteModifier().find(u"file"_s)->size += 10;
+        fakeFolder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            if (op != QNetworkAccessManager::GetOperation) {
+                return nullptr;
+            }
+            auto reply = new FakeGetReply(fakeFolder.remoteModifier(), op, request, this);
+            reply->sendContentLength = false;
+            return reply;
+        });
+
+        auto *job = vfs->hydrateFile(record._fileId, fakeFolder.localPath() + u"file"_s);
+        QVERIFY(job);
+        QSignalSpy errorSpy(job, &HydrationJob::error);
+        job->start();
+        QVERIFY(errorSpy.wait());
+
+        QVERIFY(isDehydrated(fakeFolder, *vfs, u"file"_s));
+        QCOMPARE(QFileInfo(fakeFolder.localPath() + u"file"_s).size(), 0);
+        QCOMPARE(static_cast<qint64>(FileSystem::getModTime(fakeFolder.localPath() + u"file"_s)), record._modtime);
+
+        // the next sync does not upload the partial data
+        const auto expectedRemoteState = fakeFolder.currentRemoteState();
+        QVERIFY(fakeFolder.syncOnce());
+        QCOMPARE(fakeFolder.currentRemoteState(), expectedRemoteState);
+        QVERIFY(isDehydrated(fakeFolder, *vfs, u"file"_s));
     }
 };
 

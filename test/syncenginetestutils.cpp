@@ -849,7 +849,9 @@ void FakeGetReply::respond()
     }
     payload = fileInfo->contentChar;
     size = fileInfo->size;
-    setHeader(QNetworkRequest::ContentLengthHeader, size);
+    if (sendContentLength) {
+        setHeader(QNetworkRequest::ContentLengthHeader, size);
+    }
     setAttribute(QNetworkRequest::HttpStatusCodeAttribute, 200);
     setRawHeader("OC-ETag", fileInfo->etag);
     setRawHeader("ETag", fileInfo->etag);
