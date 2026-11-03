@@ -441,6 +441,10 @@ void OpenVFS::slotHydrateJobFinished()
             if (attributes.isOk() && attributes.validate()) {
                 attributes.size = 0;
                 attributes.state = ::OpenVFS::Constants::States::Hydrated;
+                // ensure the pin state isn't contradictory, see PinState::OnlineOnly
+                if (const auto pin = pinState(item->_file); pin && *pin == PinState::OnlineOnly) {
+                    attributes.pinState = convertPinState(PinState::Unspecified);
+                }
 
                 if (const auto result = setPlaceholderAttributes(attributes, item->_modtime); !result) {
                     qCCritical(lcOpenVFS) << "Failed to update placeholder for" << hydration->targetFileName() << result.error();
@@ -594,11 +598,11 @@ bool OpenVFS::statTypeVirtualFile(csync_file_stat_t *stat, void *statData)
         const auto attribs = placeHolderAttributes(path);
         if (attribs.state == ::OpenVFS::Constants::States::DeHydrated) {
             stat->type = ItemTypeVirtualFile;
-            if (attribs.pinState == convertPinState(PinState::AlwaysLocal)) {
+            if (pin && *pin == PinState::AlwaysLocal) {
                 stat->type = ItemTypeVirtualFileDownload;
             }
         } else {
-            if (attribs.pinState == convertPinState(PinState::OnlineOnly)) {
+            if (pin && *pin == PinState::OnlineOnly) {
                 stat->type = ItemTypeVirtualFileDehydration;
             }
         }
@@ -618,6 +622,35 @@ bool OpenVFS::setPinState(const QString &folderPath, PinState state)
     attribs.pinState = convertPinState(state);
     if (!setPlaceholderAttributes(attribs)) {
         return false;
+    }
+
+    // as with the other VFS plugins, the pin state of a folder replaces the pin states of the items inside it
+    std::error_code error;
+    if (state == PinState::Excluded || !std::filesystem::is_directory(localPath.get(), error)) {
+        return true;
+    }
+    for (auto it = std::filesystem::recursive_directory_iterator(localPath.get(), std::filesystem::directory_options::skip_permission_denied, error);
+         !error && it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (it->is_symlink(error)) {
+            continue;
+        }
+        auto childAttribs = placeHolderAttributes(it->path());
+        if (!childAttribs || childAttribs.pinState == ::OpenVFS::Constants::PinStates::Inherited) {
+            continue;
+        }
+        // excluded items keep their pin state, as do the items below them
+        if (childAttribs.pinState == ::OpenVFS::Constants::PinStates::Excluded) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        childAttribs.pinState = ::OpenVFS::Constants::PinStates::Inherited;
+        if (const auto result = setPlaceholderAttributes(childAttribs); !result) {
+            qCWarning(lcOpenVFS) << "Failed to reset the pin state of" << it->path().native() << result.error();
+        }
+    }
+    if (error) {
+        qCWarning(lcOpenVFS) << "Failed to reset the pin states below" << localPath.toString() << QString::fromStdString(error.message());
     }
     return true;
 }
