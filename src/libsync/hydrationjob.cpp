@@ -69,6 +69,9 @@ void HydrationJob::start()
         //     errorMsg = tr("Aborted.");
         // }
 
+        // write the buffered data now, a write on a later close would change the modification time that the result handlers set
+        _device->close();
+
         if (!errorMsg.isEmpty()) {
             Q_EMIT error(errorMsg);
             return;
